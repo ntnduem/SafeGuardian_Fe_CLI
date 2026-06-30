@@ -1,6 +1,30 @@
 apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
+apply from: "../../node_modules/react-native-vector-icons/fonts.gradle"
+
+def envProperties = new Properties()
+def envFile = rootProject.file("../.env")
+if (envFile.exists()) {
+    envFile.withInputStream { stream ->
+        envProperties.load(stream)
+    }
+}
+
+def googleMapsApiKey = (
+    envProperties.getProperty("GOOGLE_MAPS_API_KEY")
+        ?: System.getenv("GOOGLE_MAPS_API_KEY")
+        ?: ""
+).trim()
+if (
+    (googleMapsApiKey.startsWith("\"") && googleMapsApiKey.endsWith("\"")) ||
+    (googleMapsApiKey.startsWith("'") && googleMapsApiKey.endsWith("'"))
+) {
+    googleMapsApiKey = googleMapsApiKey.substring(1, googleMapsApiKey.length() - 1)
+}
+if (!googleMapsApiKey) {
+    throw new GradleException("Missing GOOGLE_MAPS_API_KEY. Add it to the project .env file.")
+}
 
 /**
  * This is the configuration block to customize your React Native Android app.
@@ -81,6 +105,9 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName "1.0"
+        manifestPlaceholders = [
+            GOOGLE_MAPS_API_KEY: googleMapsApiKey
+        ]
     }
     signingConfigs {
         debug {
@@ -107,6 +134,7 @@ android {
 dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
+    implementation("androidx.core:core:1.13.1")
 
     if (hermesEnabled.toBoolean()) {
         implementation("com.facebook.react:hermes-android")
