@@ -1,24 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import { PermissionsAndroid, Platform } from 'react-native';
+import { BASE_URL, getContacts } from '../config/api';
 import {
   AccidentDetectionNative,
   accidentEventEmitter,
+  AccidentMlResultEvent,
   AccidentSampleEvent,
+  AccidentSuspectEvent,
 } from '../native/AccidentDetectionNative';
-import { getContacts } from '../config/api';
 import { UserStore } from '../store/userStore';
 
-type EmergencyState = 'idle' | 'countdown' | 'alertSent';
+const DEFAULT_THRESHOLD = 0.35;
 
-interface UseAccidentDetectionOptions {
-  emergencyState: EmergencyState;
-  threshold: number;
-  cooldownMs: number;
-  onAccident: (acceleration: number) => void;
+export interface AccidentEvent {
+  acceleration: number;
+  confidence: number;
+  timestamp: number;
+  mlProbability?: number;
+  modelVersion?: string;
+  detectionMethod: 'cnn-lstm' | 'simulation';
+  skipCountdown?: boolean;
+  latitude?: number;
+  longitude?: number;
 }
 
 async function requestMonitoringPermissions() {
-  if (Platform.OS !== 'android') return true;
+  if (Platform.OS !== 'android') return;
 
   const permissions = [PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
   if (Platform.Version >= 33) {
@@ -26,9 +33,15 @@ async function requestMonitoringPermissions() {
   }
 
   const result = await PermissionsAndroid.requestMultiple(permissions);
-  return permissions.every(
-    permission => result[permission] === PermissionsAndroid.RESULTS.GRANTED,
-  );
+  const locationGranted =
+    result[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] ===
+    PermissionsAndroid.RESULTS.GRANTED;
+
+  if (!locationGranted) {
+    console.warn(
+      '[AccidentDetection] Location denied; background GPS disabled, native ML sensors still active.',
+    );
+  }
 }
 
 interface EmergencyContact {
@@ -64,34 +77,55 @@ function formatContactsForNative(contacts: EmergencyContact[]) {
     .join('\n');
 }
 
-export function useAccidentDetection({
-  emergencyState,
-  threshold,
-  cooldownMs,
-  onAccident,
-}: UseAccidentDetectionOptions) {
+export function useAccidentDetection(
+  onDetected: (event: AccidentEvent) => void,
+  onCancelled?: () => void,
+) {
   const [acceleration, setAcceleration] = useState(0);
-  const stateRef = useRef(emergencyState);
+  const [mlReady, setMlReady] = useState(false);
+  const [lastProbability, setLastProbability] = useState<number | null>(null);
+  const [modelVersion, setModelVersion] = useState<string | null>(null);
+  const [offlineMode, setOfflineMode] = useState(false);
+  const [gyroAvailable, setGyroAvailable] = useState<boolean | null>(null);
+  const [mlThreshold, setMlThreshold] = useState(DEFAULT_THRESHOLD);
+
+  const onDetectedRef = useRef(onDetected);
+  onDetectedRef.current = onDetected;
+  const onCancelledRef = useRef(onCancelled);
+  onCancelledRef.current = onCancelled;
   const lastTriggerRef = useRef(0);
-  const onAccidentRef = useRef(onAccident);
 
-  useEffect(() => {
-    stateRef.current = emergencyState;
-  }, [emergencyState]);
-
-  useEffect(() => {
-    onAccidentRef.current = onAccident;
-  }, [onAccident]);
+  const handleSuspect = (
+    rawAcceleration: number,
+    probability?: number,
+    version?: string,
+    extra?: { skipCountdown?: boolean; latitude?: number; longitude?: number },
+  ) => {
+    const now = Date.now();
+    if (!extra?.skipCountdown && now - lastTriggerRef.current < 8000) return;
+    lastTriggerRef.current = now;
+    onDetectedRef.current({
+      acceleration: rawAcceleration,
+      confidence: Math.round(Math.min(1, probability ?? 0) * 100),
+      timestamp: now,
+      mlProbability: probability,
+      modelVersion: version,
+      detectionMethod: 'cnn-lstm',
+      skipCountdown: extra?.skipCountdown,
+      latitude: extra?.latitude,
+      longitude: extra?.longitude,
+    });
+  };
 
   useEffect(() => {
     let mounted = true;
 
     (async () => {
-      const user = await UserStore.getUser();
+      await requestMonitoringPermissions();
       if (!mounted) return;
 
-      const hasPermissions = await requestMonitoringPermissions();
-      if (!mounted || !hasPermissions) return;
+      const user = await UserStore.getUser();
+      if (!mounted) return;
 
       let contacts: EmergencyContact[] = [];
       if (user?.id) {
@@ -104,7 +138,7 @@ export function useAccidentDetection({
       }
 
       await AccidentDetectionNative.startMonitoring({
-        threshold,
+        apiBaseUrl: BASE_URL,
         homeLatitude: user?.homeLatitude,
         homeLongitude: user?.homeLongitude,
         homeRadiusMeters: user?.homeRadiusMeters ?? 500,
@@ -115,12 +149,16 @@ export function useAccidentDetection({
       });
 
       const snapshot = await AccidentDetectionNative.getSnapshot();
-      if (mounted) {
-        setAcceleration(snapshot.rawAcceleration ?? 0);
-        if (snapshot.mode === 'SUSPECT' && stateRef.current === 'idle') {
-          lastTriggerRef.current = Date.now();
-          onAccidentRef.current(snapshot.rawAcceleration ?? 0);
-        }
+      if (!mounted) return;
+      setAcceleration(snapshot.rawAcceleration ?? 0);
+      setMlReady(!!snapshot.mlReady);
+      setGyroAvailable(snapshot.gyroAvailable ?? null);
+      setOfflineMode(!snapshot.mlReady);
+      if (snapshot.mlThreshold) setMlThreshold(snapshot.mlThreshold);
+      if (snapshot.mlProbability != null) setLastProbability(snapshot.mlProbability);
+      if (snapshot.modelVersion) setModelVersion(snapshot.modelVersion);
+      if (snapshot.mode === 'SUSPECT') {
+        handleSuspect(snapshot.rawAcceleration ?? 0, snapshot.mlProbability, snapshot.modelVersion);
       }
     })();
 
@@ -128,35 +166,88 @@ export function useAccidentDetection({
       'accidentSample',
       (event: AccidentSampleEvent) => {
         setAcceleration(event.rawAcceleration ?? 0);
+        if (event.mlReady != null) {
+          setMlReady(event.mlReady);
+          setOfflineMode(!event.mlReady);
+        }
+        if (event.gyroAvailable != null) setGyroAvailable(event.gyroAvailable);
+        if (event.mlProbability != null) setLastProbability(event.mlProbability);
+      },
+    );
+
+    const mlSub = accidentEventEmitter?.addListener(
+      'accidentMlResult',
+      (event: AccidentMlResultEvent) => {
+        setMlReady(true);
+        setOfflineMode(false);
+        setLastProbability(event.probability);
+        setMlThreshold(event.threshold);
+        setGyroAvailable(event.gyroAvailable);
+        if (event.modelVersion) setModelVersion(event.modelVersion);
+        console.log(
+          `[AccidentDetection] ML p=${event.probability.toFixed(3)} accident=${event.accident} threshold=${event.threshold}` +
+          ` lastAccel=${event.lastAccel.toFixed(1)} m/s² peakAccel=${event.peakAccel.toFixed(1)} m/s² impact=${event.impact.toFixed(1)} m/s²`,
+        );
+      },
+    );
+
+    const statusSub = accidentEventEmitter?.addListener(
+      'accidentMlStatus',
+      (event: { mlReady?: boolean; gyroAvailable?: boolean; threshold?: number; modelVersion?: string }) => {
+        setMlReady(!!event.mlReady);
+        setOfflineMode(!event.mlReady);
+        if (event.gyroAvailable != null) setGyroAvailable(event.gyroAvailable);
+        if (event.threshold != null) setMlThreshold(event.threshold);
+        if (event.modelVersion) setModelVersion(event.modelVersion);
       },
     );
 
     const suspectSub = accidentEventEmitter?.addListener(
       'accidentSuspect',
-      (event: AccidentSampleEvent) => {
-        const now = Date.now();
-        const raw = event.rawAcceleration ?? 0;
-        const impact = event.impactAcceleration ?? 0;
-
-        setAcceleration(raw);
-
-        if (
-          impact > threshold &&
-          stateRef.current === 'idle' &&
-          now - lastTriggerRef.current > cooldownMs
-        ) {
-          lastTriggerRef.current = now;
-          onAccidentRef.current(raw);
-        }
+      (event: AccidentSuspectEvent) => {
+        console.log(
+          `[AccidentDetection] Native ML suspect peakAccel=${(event.rawAcceleration ?? 0).toFixed(1)} p=${event.mlProbability ?? 'n/a'}`,
+        );
+        handleSuspect(event.rawAcceleration ?? 0, event.mlProbability, event.modelVersion);
       },
     );
+
+    const timeoutSub = accidentEventEmitter?.addListener(
+      'accidentCountdownTimeout',
+      (event: AccidentSuspectEvent) => {
+        console.log(
+          `[AccidentDetection] Native SOS timeout peakAccel=${(event.rawAcceleration ?? 0).toFixed(1)} p=${event.mlProbability ?? 'n/a'}`,
+        );
+        handleSuspect(event.rawAcceleration ?? 0, event.mlProbability, event.modelVersion, {
+          skipCountdown: true,
+          latitude: event.latitude,
+          longitude: event.longitude,
+        });
+      },
+    );
+
+    const cancelledSub = accidentEventEmitter?.addListener('accidentCancelled', () => {
+      onCancelledRef.current?.();
+    });
 
     return () => {
       mounted = false;
       sampleSub?.remove();
+      mlSub?.remove();
+      statusSub?.remove();
       suspectSub?.remove();
+      timeoutSub?.remove();
+      cancelledSub?.remove();
     };
-  }, [cooldownMs, threshold]);
+  }, []);
 
-  return { acceleration, threshold };
+  return {
+    acceleration,
+    mlReady,
+    lastProbability,
+    modelVersion,
+    offlineMode,
+    gyroAvailable,
+    mlThreshold,
+  };
 }

@@ -6,4 +6,13 @@
         <item name="android:editTextBackground">@drawable/rn_edit_text_material</item>
     </style>
 
+    <style name="EmergencySosTheme" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">#080C10</item>
+        <item name="android:statusBarColor">#080C10</item>
+        <item name="android:navigationBarColor">#080C10</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowShowWallpaper">false</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
 </resources>

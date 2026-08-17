@@ -4,25 +4,32 @@ import CountdownScreen from '../screens/emergency/CountdownScreen';
 import AlertSentScreen from '../screens/emergency/AlertSentScreen';
 import { UserStore } from '../store/userStore';
 import { sendSimulationAlert, sendAccidentAlert, createAccidentEvent, getContacts } from '../config/api';
-import { useAccidentDetection } from '../hooks/useAccidentDetection';
+import { AccidentEvent, useAccidentDetection } from '../hooks/useAccidentDetection';
 import { AccidentDetectionNative } from '../native/AccidentDetectionNative';
 
 type EmergencyState = 'idle' | 'countdown' | 'alertSent';
-export const ACCIDENT_THRESHOLD = 15.0;
-const TRIGGER_COOLDOWN_MS = 5000;
+export const ML_ACCIDENT_THRESHOLD = 0.35;
 
 interface EmergencyContextType {
   state: EmergencyState;
   acceleration: number;
-  threshold: number;
-  triggerAccident: (acceleration?: number) => void;
+  mlReady: boolean;
+  lastProbability: number | null;
+  offlineMode: boolean;
+  gyroAvailable: boolean | null;
+  mlThreshold: number;
+  triggerAccident: (acceleration?: number, extras?: Partial<AccidentEvent>) => void;
   cancelEmergency: () => void;
 }
 
 const EmergencyContext = createContext<EmergencyContextType>({
   state: 'idle',
   acceleration: 0,
-  threshold: ACCIDENT_THRESHOLD,
+  mlReady: false,
+  lastProbability: null,
+  offlineMode: true,
+  gyroAvailable: null,
+  mlThreshold: ML_ACCIDENT_THRESHOLD,
   triggerAccident: () => {},
   cancelEmergency: () => {},
 });
@@ -34,6 +41,12 @@ interface AlertInfo {
   latitude: number;
   longitude: number;
   acceleration: number;
+}
+
+interface AlertExtras {
+  mlProbability?: number;
+  modelVersion?: string;
+  detectionMethod?: string;
 }
 
 interface EmergencyContact {
@@ -79,9 +92,27 @@ export function EmergencyProvider({ children }: { children: React.ReactNode }) {
     alertId: null, latitude: 0, longitude: 0, acceleration: 0,
   });
   const accelerationRef = useRef<number>(0);
+  const extrasRef = useRef<AlertExtras>({});
+  const stateRef = useRef<EmergencyState>('idle');
+  stateRef.current = state;
 
-  const triggerAccident = useCallback((acceleration = 0) => {
+  const triggerAccident = useCallback((acceleration = 0, extras?: Partial<AccidentEvent>) => {
+    if (stateRef.current !== 'idle') return;
+
+    const isSimulation = acceleration === 0 && extras?.detectionMethod !== 'cnn-lstm';
+    const isMlConfirmed = extras?.detectionMethod === 'cnn-lstm';
+
+    if (!isSimulation && !isMlConfirmed) {
+      console.warn('[Emergency] Blocked alert: only ML-confirmed accidents trigger notifications');
+      return;
+    }
+
     accelerationRef.current = acceleration;
+    extrasRef.current = {
+      mlProbability: extras?.mlProbability,
+      modelVersion: extras?.modelVersion,
+      detectionMethod: extras?.detectionMethod ?? (isSimulation ? 'simulation' : 'cnn-lstm'),
+    };
     setState('countdown');
   }, []);
 
@@ -91,22 +122,14 @@ export function EmergencyProvider({ children }: { children: React.ReactNode }) {
     setState('idle');
   }, []);
 
-  const { acceleration, threshold } = useAccidentDetection({
-    emergencyState: state,
-    threshold: ACCIDENT_THRESHOLD,
-    cooldownMs: TRIGGER_COOLDOWN_MS,
-    onAccident: triggerAccident,
-  });
-
-  // Được gọi từ CountdownScreen khi đếm ngược kết thúc
   const onCountdownEnd = useCallback(async (lat: number, lng: number, accel: number) => {
+    const extras = extrasRef.current;
     try {
       await AccidentDetectionNative.markEmergency();
       const user = await UserStore.getUser();
       const userId = user?.id ?? await UserStore.getUserId();
       if (!userId) return;
 
-      // Ghi nhận event
       let contacts: EmergencyContact[] = [];
       try {
         const contactRes = await getContacts(userId);
@@ -124,13 +147,19 @@ export function EmergencyProvider({ children }: { children: React.ReactNode }) {
       });
 
       const eventRes = await createAccidentEvent({
-        userId, eventType: 'STRONG_IMPACT',
-        acceleration: accel, threshold: ACCIDENT_THRESHOLD,
-        latitude: lat, longitude: lng,
+        userId,
+        eventType: 'STRONG_IMPACT',
+        acceleration: accel,
+        threshold: extras.mlProbability != null ? ML_ACCIDENT_THRESHOLD : 0,
+        latitude: lat,
+        longitude: lng,
+        mlProbability: extras.mlProbability,
+        modelVersion: extras.modelVersion,
+        detectionMethod: extras.detectionMethod ?? (accel > 0 ? 'cnn-lstm' : 'simulation'),
+        isConfirmedAccident: true,
       });
       const eventId = eventRes.data?.data?.id ?? null;
 
-      // Gửi alert (simulation hoặc accident)
       const res = accel > 0
         ? await sendAccidentAlert(userId, eventId, lat, lng, accel)
         : await sendSimulationAlert(userId, lat, lng);
@@ -144,11 +173,42 @@ export function EmergencyProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const onNativeAccident = useCallback((event: AccidentEvent) => {
+    if (event.skipCountdown) {
+      extrasRef.current = {
+        mlProbability: event.mlProbability,
+        modelVersion: event.modelVersion,
+        detectionMethod: event.detectionMethod,
+      };
+      accelerationRef.current = event.acceleration;
+      onCountdownEnd(event.latitude ?? 0, event.longitude ?? 0, event.acceleration);
+      return;
+    }
+    triggerAccident(event.acceleration, event);
+  }, [onCountdownEnd, triggerAccident]);
+
+  const onNativeCancelled = useCallback(() => {
+    AccidentDetectionNative.clearEmergencyLockScreen();
+    setState('idle');
+  }, []);
+
+  const { acceleration, mlReady, lastProbability, offlineMode, gyroAvailable, mlThreshold } =
+    useAccidentDetection(onNativeAccident, onNativeCancelled);
+
   return (
-    <EmergencyContext.Provider value={{ state, acceleration, threshold, triggerAccident, cancelEmergency }}>
+    <EmergencyContext.Provider value={{
+      state,
+      acceleration,
+      mlReady,
+      lastProbability,
+      offlineMode,
+      gyroAvailable,
+      mlThreshold,
+      triggerAccident,
+      cancelEmergency,
+    }}>
       {children}
 
-      {/* Countdown Modal */}
       <Modal visible={state === 'countdown'} animationType="slide" statusBarTranslucent>
         <CountdownScreen
           acceleration={accelerationRef.current}
@@ -157,7 +217,6 @@ export function EmergencyProvider({ children }: { children: React.ReactNode }) {
         />
       </Modal>
 
-      {/* Alert Sent Modal */}
       <Modal visible={state === 'alertSent'} animationType="fade" statusBarTranslucent>
         <AlertSentScreen
           alertId={alertInfo.alertId}

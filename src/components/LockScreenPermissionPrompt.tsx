@@ -83,8 +83,8 @@ export default function LockScreenPermissionPrompt() {
         <View style={styles.card}>
           <Text style={styles.title}>Cấp quyền hiển thị cảnh báo</Text>
           <Text style={styles.description}>
-            SafeGuardian cần quyền thông báo toàn màn hình để mở giao diện hồ sơ y tế và
-            liên hệ khẩn cấp ngay trên màn hình khóa khi phát hiện tai nạn.
+            SafeGuardian cần quyền thông báo toàn màn hình (giống cuộc gọi đến) để hiện SOS
+            trên màn hình khóa khi phát hiện tai nạn lúc bạn không mở app.
           </Text>
           <Text style={styles.hint}>
             Ở màn hình cài đặt tiếp theo, hãy bật mục thông báo toàn màn hình cho SafeGuardian.

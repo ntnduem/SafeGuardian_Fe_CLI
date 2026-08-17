@@ -3,7 +3,7 @@ import axios from 'axios';
 // Đổi thành IP máy chạy backend khi test trên điện thoại thật.
 // Ví dụ: http://192.168.1.5:8080
 // export const BASE_URL = 'http://10.47.24.24:8080';
-export const BASE_URL = 'http://192.168.100.152:8080';
+export const BASE_URL = 'http://10.10.0.214:8080';
 
 const api = axios.create({
   baseURL: BASE_URL,
@@ -99,6 +99,58 @@ export const createAccidentEvent = (data: {
   threshold: number;
   latitude: number;
   longitude: number;
+  mlProbability?: number;
+  modelVersion?: string;
+  detectionMethod?: string;
+  isConfirmedAccident?: boolean;
 }) => api.post('/api/accident-events', data);
+
+export interface ImuSample {
+  accX: number;
+  accY: number;
+  accZ: number;
+  gyroX: number;
+  gyroY: number;
+  gyroZ: number;
+  accMagnitude?: number;
+  gyroMagnitude?: number;
+}
+
+export interface AccidentPredictResult {
+  accident: boolean;
+  probability: number;
+  threshold: number;
+  modelVersion: string;
+  windowSize: number;
+}
+
+export interface ModelInfo {
+  ready: boolean;
+  modelVersion?: string;
+  windowSize: number;
+  stride: number;
+  numFeatures?: number;
+  threshold: number;
+  featureOrder?: string[];
+}
+
+export const getModelInfo = () =>
+  api.get<{ success: boolean; data: ModelInfo }>('/api/ml/model-info');
+
+export const predictAccident = (samples: ImuSample[]) =>
+  api.post<{ success: boolean; data: AccidentPredictResult }>(
+    '/api/ml/accident/predict',
+    { samples },
+    { timeout: 4000 },
+  );
+
+export async function pingBackend(): Promise<boolean> {
+  try {
+    await api.get('/api/ml/model-info', { timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export default api;

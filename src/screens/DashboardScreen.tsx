@@ -23,7 +23,15 @@ type Nav = CompositeNavigationProp<
 
 export default function DashboardScreen() {
   const nav             = useNavigation<Nav>();
-  const { acceleration, threshold, triggerAccident } = useEmergency();
+  const {
+    triggerAccident,
+    acceleration,
+    mlReady,
+    lastProbability,
+    offlineMode,
+    gyroAvailable,
+    mlThreshold,
+  } = useEmergency();
   const { location }    = useLocation();
   const [userName, setUserName] = useState('');
   const [userId, setUserId]     = useState('');
@@ -106,8 +114,18 @@ export default function DashboardScreen() {
           <Ionicons name="pulse-outline" size={18} color={Colors.textSecondary} />
           <Text style={s.accelText}>
             Cảm biến: {acceleration.toFixed(1)} m/s²
+            {offlineMode
+              ? '  ·  AI: offline (chưa gửi cảnh báo)'
+              : lastProbability != null
+              ? `  ·  AI: ${(lastProbability * 100).toFixed(0)}%`
+              : mlReady ? '  ·  AI: sẵn sàng' : '  ·  AI: chờ kết nối'}
+            {gyroAvailable === false ? '  ·  không có gyro' : ''}
           </Text>
-          <View style={[s.accelDot, { backgroundColor: acceleration > threshold ? Colors.primary : Colors.success }]} />
+          <View style={[s.accelDot, {
+            backgroundColor: (lastProbability ?? 0) >= mlThreshold
+              ? Colors.primary
+              : Colors.success,
+          }]} />
         </View>
 
         {/* SOS Button */}

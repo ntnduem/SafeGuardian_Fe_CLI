@@ -9,6 +9,12 @@ import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnable
 import com.facebook.react.defaults.DefaultReactActivityDelegate
 
 class MainActivity : ReactActivity() {
+  companion object {
+    @JvmStatic
+    var isInForeground: Boolean = false
+      private set
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
       setShowWhenLocked(true)
@@ -22,6 +28,16 @@ class MainActivity : ReactActivity() {
     }
     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     super.onCreate(savedInstanceState)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    isInForeground = true
+  }
+
+  override fun onPause() {
+    isInForeground = false
+    super.onPause()
   }
 
   /**

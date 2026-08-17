@@ -33,6 +33,11 @@ set APP_HOME=%DIRNAME%
 @rem Resolve any "." and ".." in APP_HOME to make it shorter.
 for %%i in ("%APP_HOME%") do set APP_HOME=%%~fi
 
+@rem Keep Gradle caches outside the repo (Metro/Cursor lock android\.gradle on Windows).
+set "GRADLE_USER_HOME=D:\gradle-home"
+set "GRADLE_PROJECT_CACHE_DIR=D:\gradle-home\project-cache"
+if not exist "%GRADLE_PROJECT_CACHE_DIR%" mkdir "%GRADLE_PROJECT_CACHE_DIR%"
+
 @rem Add default JVM options here. You can also use JAVA_OPTS and GRADLE_OPTS to pass JVM options to this script.
 set DEFAULT_JVM_OPTS="-Xmx64m" "-Xms64m"
 
@@ -72,7 +77,7 @@ set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
 
 
 @rem Execute Gradle
-"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain --project-cache-dir="%GRADLE_PROJECT_CACHE_DIR%" %*
 
 :end
 @rem End local scope for the variables with windows NT shell

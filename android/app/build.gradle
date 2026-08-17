@@ -23,7 +23,14 @@ if (
     googleMapsApiKey = googleMapsApiKey.substring(1, googleMapsApiKey.length() - 1)
 }
 if (!googleMapsApiKey) {
-    throw new GradleException("Missing GOOGLE_MAPS_API_KEY. Add it to the project .env file.")
+    def isReleaseTask = gradle.startParameter.taskNames.any { taskName ->
+        taskName.toLowerCase().contains('release')
+    }
+    if (isReleaseTask) {
+        throw new GradleException("Missing GOOGLE_MAPS_API_KEY. Add it to the project .env file.")
+    }
+    googleMapsApiKey = "debug-maps-key-placeholder"
+    logger.warn("GOOGLE_MAPS_API_KEY missing; using debug placeholder. Copy .env.example to .env for Maps.")
 }
 
 /**

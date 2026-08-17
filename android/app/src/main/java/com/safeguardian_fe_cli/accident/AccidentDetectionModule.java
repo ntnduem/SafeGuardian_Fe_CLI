@@ -6,12 +6,10 @@ import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
-import android.content.res.AssetFileDescriptor;
-import android.net.Uri;
-import android.media.AudioAttributes;
 import android.media.AudioManager;
-import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Build;
+import android.os.PowerManager;
 import android.provider.Settings;
 
 import androidx.annotation.NonNull;
@@ -28,10 +26,8 @@ import com.facebook.react.modules.core.DeviceEventManagerModule;
 import com.safeguardian_fe_cli.MainActivity;
 
 public class AccidentDetectionModule extends ReactContextBaseJavaModule {
-    private static final String COUNTDOWN_SOUND_RESOURCE = "emergency_countdown";
     private static final String LOCK_SCREEN_CHANNEL_ID = "safeguardian_emergency_full_screen_v3";
     private static ReactApplicationContext reactContext;
-    private MediaPlayer countdownPlayer;
 
     public AccidentDetectionModule(ReactApplicationContext context) {
         super(context);
@@ -64,12 +60,14 @@ public class AccidentDetectionModule extends ReactContextBaseJavaModule {
         putOptionalStringExtra(config, intent, "emergencyBloodType");
         putOptionalStringExtra(config, intent, "emergencyMedicalNote");
         putOptionalStringExtra(config, intent, "emergencyContactsText");
+        putOptionalStringExtra(config, intent, "apiBaseUrl");
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getReactApplicationContext().startForegroundService(intent);
         } else {
             getReactApplicationContext().startService(intent);
         }
+        requestUnrestrictedBackgroundIfNeeded();
         promise.resolve(true);
     }
 
@@ -98,56 +96,28 @@ public class AccidentDetectionModule extends ReactContextBaseJavaModule {
     }
 
     @ReactMethod
+    public void notifyMlSuspect(double rawAcceleration, double impactAcceleration, Promise promise) {
+        Intent intent = new Intent(getReactApplicationContext(), AccidentDetectionService.class);
+        intent.setAction(AccidentDetectionService.ACTION_ML_SUSPECT);
+        intent.putExtra("rawAcceleration", rawAcceleration);
+        intent.putExtra("impactAcceleration", impactAcceleration);
+        getReactApplicationContext().startService(intent);
+        promise.resolve(true);
+    }
+
+    @ReactMethod
     public void playCountdownSound(Promise promise) {
         try {
-            int soundResId = getReactApplicationContext()
-                .getResources()
-                .getIdentifier(
-                    COUNTDOWN_SOUND_RESOURCE,
-                    "raw",
-                    getReactApplicationContext().getPackageName()
-                );
-
-            if (soundResId == 0) {
-                promise.resolve(false);
-                return;
-            }
-
-            stopCountdownPlayer();
-            AssetFileDescriptor descriptor = getReactApplicationContext()
-                .getResources()
-                .openRawResourceFd(soundResId);
-            if (descriptor == null) {
-                promise.resolve(false);
-                return;
-            }
-
-            countdownPlayer = new MediaPlayer();
-            countdownPlayer.setAudioAttributes(
-                new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            );
-            countdownPlayer.setDataSource(
-                descriptor.getFileDescriptor(),
-                descriptor.getStartOffset(),
-                descriptor.getLength()
-            );
-            descriptor.close();
-            countdownPlayer.setLooping(true);
-            countdownPlayer.prepare();
-            countdownPlayer.start();
+            EmergencyAlarmPlayer.start(getReactApplicationContext());
             promise.resolve(true);
         } catch (Exception error) {
-            stopCountdownPlayer();
             promise.reject("COUNTDOWN_SOUND_ERROR", error);
         }
     }
 
     @ReactMethod
     public void stopCountdownSound(Promise promise) {
-        stopCountdownPlayer();
+        EmergencyAlarmPlayer.stop();
         promise.resolve(true);
     }
 
@@ -289,6 +259,15 @@ public class AccidentDetectionModule extends ReactContextBaseJavaModule {
         map.putString("mode", AccidentDetectionService.getCurrentMode());
         map.putDouble("rawAcceleration", AccidentDetectionService.getLastRawAcceleration());
         map.putDouble("impactAcceleration", AccidentDetectionService.getLastImpactAcceleration());
+        map.putBoolean("mlReady", AccidentDetectionService.isMlReady());
+        map.putBoolean("gyroAvailable", AccidentDetectionService.isGyroAvailable());
+        map.putDouble("mlThreshold", AccidentDetectionService.getLastMlThreshold());
+        if (AccidentDetectionService.getLastMlProbability() >= 0) {
+            map.putDouble("mlProbability", AccidentDetectionService.getLastMlProbability());
+        }
+        if (AccidentDetectionService.getLastModelVersion() != null) {
+            map.putString("modelVersion", AccidentDetectionService.getLastModelVersion());
+        }
         promise.resolve(map);
     }
 
@@ -300,17 +279,6 @@ public class AccidentDetectionModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void removeListeners(double count) {
         // Required by NativeEventEmitter.
-    }
-
-    private void stopCountdownPlayer() {
-        if (countdownPlayer == null) {
-            return;
-        }
-        if (countdownPlayer.isPlaying()) {
-            countdownPlayer.stop();
-        }
-        countdownPlayer.release();
-        countdownPlayer = null;
     }
 
     private void createLockScreenNotificationChannel() {
@@ -348,6 +316,23 @@ public class AccidentDetectionModule extends ReactContextBaseJavaModule {
             if (value != null) {
                 intent.putExtra(key, value);
             }
+        }
+    }
+
+    private void requestUnrestrictedBackgroundIfNeeded() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        ReactApplicationContext context = getReactApplicationContext();
+        PowerManager powerManager = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        if (powerManager == null || powerManager.isIgnoringBatteryOptimizations(context.getPackageName())) {
+            return;
+        }
+        try {
+            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + context.getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+        } catch (Exception ignored) {
+            // User can still grant this from system settings.
         }
     }
 
