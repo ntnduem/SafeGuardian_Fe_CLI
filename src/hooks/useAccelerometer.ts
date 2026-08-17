@@ -9,17 +9,22 @@ export function useAccelerometer() {
   const [exceeded, setExceeded] = useState(false);
 
   useEffect(() => {
-    setUpdateIntervalForType(SensorTypes.accelerometer, 200);
+    setUpdateIntervalForType(SensorTypes.accelerometer, 100);
 
-    const sub = accelerometer.subscribe(({ x, y, z }) => {
-      const { rawMagnitude, impactMagnitude } = calculateImuMagnitude(x, y, z);
-      setAcceleration(rawMagnitude);
+    const sub = accelerometer.subscribe(
+      ({ x, y, z }) => {
+        const { rawMagnitude, impactMagnitude } = calculateImuMagnitude(x, y, z);
+        setAcceleration(rawMagnitude);
 
-      if (impactMagnitude > THRESHOLD) {
-        setExceeded(true);
-        setTimeout(() => setExceeded(false), 2000);
-      }
-    });
+        if (impactMagnitude > THRESHOLD) {
+          setExceeded(true);
+          setTimeout(() => setExceeded(false), 2000);
+        }
+      },
+      error => {
+        console.warn('[Accelerometer] sensor error:', error);
+      },
+    );
 
     return () => sub.unsubscribe();
   }, []);

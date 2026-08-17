@@ -6,12 +6,33 @@ export interface AccidentSampleEvent {
   rawAcceleration: number;
   impactAcceleration: number;
   mode: AccidentMode;
+  mlReady?: boolean;
+  gyroAvailable?: boolean;
+  mlProbability?: number;
   latitude?: number;
   longitude?: number;
 }
 
-interface StartMonitoringConfig {
+export interface AccidentMlResultEvent {
+  accident: boolean;
+  probability: number;
   threshold: number;
+  lastAccel: number;
+  peakAccel: number;
+  impact: number;
+  mlReady: boolean;
+  gyroAvailable: boolean;
+  modelVersion?: string;
+}
+
+export interface AccidentSuspectEvent extends AccidentSampleEvent {
+  mlProbability?: number;
+  modelVersion?: string;
+  detectionMethod?: string;
+}
+
+interface StartMonitoringConfig {
+  apiBaseUrl: string;
   homeLatitude?: number;
   homeLongitude?: number;
   homeRadiusMeters?: number;
@@ -41,11 +62,19 @@ export interface LockScreenPermissionStatus {
   canUseFullScreenIntent: boolean;
 }
 
+export interface AccidentSnapshot extends AccidentSampleEvent {
+  mlReady?: boolean;
+  gyroAvailable?: boolean;
+  mlThreshold?: number;
+  modelVersion?: string;
+}
+
 interface AccidentDetectionModule {
   startMonitoring(config: StartMonitoringConfig): Promise<boolean>;
   stopMonitoring(): Promise<boolean>;
   markSafe(): Promise<boolean>;
   markEmergency(): Promise<boolean>;
+  notifyMlSuspect(rawAcceleration: number, impactAcceleration: number): Promise<boolean>;
   playCountdownSound(): Promise<boolean>;
   stopCountdownSound(): Promise<boolean>;
   getAlarmVolumeInfo(): Promise<AlarmVolumeInfo>;
@@ -53,7 +82,7 @@ interface AccidentDetectionModule {
   openLockScreenPermissionSettings(): Promise<boolean>;
   showEmergencyLockScreen(data: EmergencyLockScreenInfo): Promise<boolean>;
   clearEmergencyLockScreen(): Promise<boolean>;
-  getSnapshot(): Promise<AccidentSampleEvent>;
+  getSnapshot(): Promise<AccidentSnapshot>;
 }
 
 const nativeModule = NativeModules.AccidentDetection as AccidentDetectionModule | undefined;
@@ -75,6 +104,11 @@ export const AccidentDetectionNative = {
 
   markEmergency() {
     return nativeModule?.markEmergency() ?? Promise.resolve(false);
+  },
+
+  notifyMlSuspect(rawAcceleration: number, impactAcceleration: number) {
+    return nativeModule?.notifyMlSuspect(rawAcceleration, impactAcceleration)
+      ?? Promise.resolve(false);
   },
 
   playCountdownSound() {
@@ -113,11 +147,17 @@ export const AccidentDetectionNative = {
     return nativeModule?.clearEmergencyLockScreen() ?? Promise.resolve(false);
   },
 
-  getSnapshot() {
-    return nativeModule?.getSnapshot() ?? Promise.resolve({
+  getSnapshot(): Promise<AccidentSnapshot> {
+    if (nativeModule?.getSnapshot) {
+      return nativeModule.getSnapshot();
+    }
+    return Promise.resolve({
       rawAcceleration: 0,
       impactAcceleration: 0,
-      mode: 'OUTDOOR' as AccidentMode,
+      mode: 'OUTDOOR',
+      mlReady: false,
+      gyroAvailable: false,
+      mlThreshold: 0.35,
     });
   },
 };
