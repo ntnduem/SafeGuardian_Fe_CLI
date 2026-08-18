@@ -3,7 +3,7 @@ import axios from 'axios';
 // Đổi thành IP máy chạy backend khi test trên điện thoại thật.
 // Ví dụ: http://192.168.1.5:8080
 // export const BASE_URL = 'http://10.47.24.24:8080';
-export const BASE_URL = 'http://10.10.0.214:8080';
+export const BASE_URL = 'https://safeguardianbe-production.up.railway.app';
 
 const api = axios.create({
   baseURL: BASE_URL,
